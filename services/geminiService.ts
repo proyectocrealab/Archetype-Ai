@@ -1,7 +1,23 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { UserArchetype, ResearchData, TeacherFeedback } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let ai: GoogleGenAI | null = null;
+
+export const initializeGemini = (apiKey: string) => {
+  ai = new GoogleGenAI({ apiKey });
+};
+
+export const hasApiKey = (): boolean => {
+  return !!ai;
+};
+
+// Helper to get the AI instance or throw if not initialized
+const getAI = () => {
+  if (!ai) {
+    throw new Error("API Key not set. Please enter your Gemini API Key in the settings.");
+  }
+  return ai;
+};
 
 // Schema definition for the archetypes
 const archetypeSchema = {
@@ -74,9 +90,21 @@ const feedbackSchema = {
   required: ["grade", "score", "feedbackTitle", "strengths", "improvements", "thoughtProvokingQuestions", "overallComment"]
 };
 
+// Helper to identify quota errors
+const handleGeminiError = (error: any) => {
+  console.error("Gemini API Error:", error);
+  const msg = (error.message || '').toLowerCase();
+  const status = error.status || error.response?.status;
+  
+  if (status === 429 || status === 'RESOURCE_EXHAUSTED' || msg.includes('quota') || msg.includes('429')) {
+    throw new Error("QUOTA_EXCEEDED");
+  }
+  throw error;
+};
+
 export const generateArchetypesFromData = async (inputData: string): Promise<UserArchetype[]> => {
   try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: 'gemini-3-pro-preview',
       contents: `
         You are an expert User Researcher and UX Designer. 
@@ -107,14 +135,14 @@ export const generateArchetypesFromData = async (inputData: string): Promise<Use
     }));
 
   } catch (error) {
-    console.error("Error generating archetypes:", error);
-    throw error;
+    handleGeminiError(error);
+    throw error; // Fallback if handleGeminiError doesn't throw
   }
 };
 
 export const generateTeacherFeedback = async (data: ResearchData): Promise<TeacherFeedback> => {
   try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: `
         You are "Professor Archetype", a supportive but rigorous UX Design professor at a top design university.
@@ -155,14 +183,14 @@ export const generateTeacherFeedback = async (data: ResearchData): Promise<Teach
     return JSON.parse(text) as TeacherFeedback;
 
   } catch (error) {
-    console.error("Error generating feedback:", error);
+    handleGeminiError(error);
     throw error;
   }
 };
 
 export const generatePersonaImage = async (prompt: string): Promise<string> => {
   try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {
         parts: [{
@@ -186,6 +214,7 @@ export const generatePersonaImage = async (prompt: string): Promise<string> => {
     throw new Error("No image generated");
   } catch (error) {
     console.error("Error generating image:", error);
+    handleGeminiError(error);
     throw error;
   }
 };

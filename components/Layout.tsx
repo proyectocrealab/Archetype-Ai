@@ -1,12 +1,13 @@
 import React, { ReactNode } from 'react';
-import { Users, Github } from 'lucide-react';
+import { Users, LogOut } from 'lucide-react';
 
 interface LayoutProps {
   children: ReactNode;
-  onNavigate?: (view: any) => void; // Using any to avoid circular type dependency for now, or just simple callback
+  onNavigate?: (view: any) => void;
+  onClearKey?: () => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, onNavigate }) => {
+const Layout: React.FC<LayoutProps> = ({ children, onNavigate, onClearKey }) => {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col text-slate-100 font-sans selection:bg-brand-500/30 selection:text-brand-100">
       
@@ -30,9 +31,17 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate }) => {
             >
                 My Library
             </button>
-            <a href="#" className="text-sm font-medium text-slate-400 hover:text-white transition-colors">
-              About
-            </a>
+            {onClearKey && (
+                <button 
+                    onClick={() => {
+                        if(confirm('Remove API Key from this device?')) onClearKey();
+                    }}
+                    className="text-xs font-medium text-slate-500 hover:text-rose-400 transition-colors flex items-center gap-1.5 border border-slate-800 hover:border-rose-500/30 px-2 py-1 rounded bg-slate-900"
+                    title="Change API Key"
+                >
+                    <LogOut size={12} /> Key
+                </button>
+            )}
           </nav>
         </div>
       </header>

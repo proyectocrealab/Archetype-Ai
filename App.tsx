@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Layout from './components/Layout';
 import InputForm from './components/InputForm';
 import ArchetypeCard from './components/ArchetypeCard';
 import ComparisonView from './components/ComparisonView';
 import SavedArchetypesView from './components/SavedArchetypesView';
-import { generateArchetypesFromData } from './services/geminiService';
+import ApiKeyInput from './components/ApiKeyInput';
+import { generateArchetypesFromData, initializeGemini } from './services/geminiService';
 import { UserArchetype, ViewState, ResearchData } from './types';
 import { ArrowLeft, RefreshCcw, BookOpen, ArrowDown, Search, SplitSquareHorizontal, CheckCircle2, User, Users } from 'lucide-react';
 
@@ -35,6 +36,7 @@ const SAMPLE_ARCHETYPE: UserArchetype = {
 };
 
 const App: React.FC = () => {
+  const [apiKey, setApiKey] = useState<string | null>(null);
   const [view, setView] = useState<ViewState>(ViewState.INPUT);
   const [archetypes, setArchetypes] = useState<UserArchetype[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -57,6 +59,26 @@ const App: React.FC = () => {
   const [inputCache, setInputCache] = useState(''); // Stores the stringified prompt for regeneration
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Initialization Effect
+  useEffect(() => {
+    const storedKey = localStorage.getItem('gemini_api_key');
+    if (storedKey) {
+        initializeGemini(storedKey);
+        setApiKey(storedKey);
+    }
+  }, []);
+
+  const handleSetApiKey = (key: string) => {
+      localStorage.setItem('gemini_api_key', key);
+      initializeGemini(key);
+      setApiKey(key);
+  };
+
+  const handleClearApiKey = () => {
+      localStorage.removeItem('gemini_api_key');
+      setApiKey(null);
+  };
 
   const formatPrompt = (data: ResearchData): string => {
       return `
@@ -84,7 +106,11 @@ const App: React.FC = () => {
       setArchetypes(results);
       setView(ViewState.RESULTS);
     } catch (err: any) {
-      setError("Failed to generate archetypes. Please ensure you've provided enough detail.");
+      if (err.message === "QUOTA_EXCEEDED") {
+         setError("Service Quota Exceeded. Please try again later or check your API usage.");
+      } else {
+         setError("Failed to generate archetypes. Please ensure you've provided enough detail and check your API key.");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -98,7 +124,11 @@ const App: React.FC = () => {
         setArchetypes(results);
         setSelectedArchetypeIds(new Set()); // Reset selections
     } catch (err: any) {
-        setError("Failed to regenerate archetypes.");
+        if (err.message === "QUOTA_EXCEEDED") {
+             setError("Service Quota Exceeded. Please try again later.");
+        } else {
+             setError("Failed to regenerate archetypes.");
+        }
     } finally {
         setIsLoading(false);
     }
@@ -146,8 +176,13 @@ const App: React.FC = () => {
       if (newView === 'RESULTS' && archetypes.length > 0) setView(ViewState.RESULTS);
   }
 
+  // Render API Key Input if not set
+  if (!apiKey) {
+      return <ApiKeyInput onSetKey={handleSetApiKey} />;
+  }
+
   return (
-    <Layout onNavigate={navigateToView}>
+    <Layout onNavigate={navigateToView} onClearKey={handleClearApiKey}>
       {view === ViewState.INPUT && (
         <div className="space-y-20">
             {/* Hero & Input Section */}
@@ -170,8 +205,8 @@ const App: React.FC = () => {
                 />
                 
                 {error && (
-                    <div className="bg-rose-500/10 border border-rose-500/50 text-rose-200 px-6 py-4 rounded-xl max-w-lg w-full text-center animate-fade-in">
-                        {error}
+                    <div className="bg-rose-500/10 border border-rose-500/50 text-rose-200 px-6 py-4 rounded-xl max-w-lg w-full text-center animate-fade-in flex items-center justify-center gap-2">
+                        <span className="font-bold">Error:</span> {error}
                     </div>
                 )}
             </div>
@@ -353,31 +388,6 @@ const App: React.FC = () => {
           </div>
 
         </div>
-      )}
-
-      {view === ViewState.COMPARE && (
-          <div className="space-y-8 animate-fade-in">
-             <div className="border-b border-slate-800 pb-6 flex items-center justify-between">
-                <div>
-                     <button 
-                        onClick={() => setView(ViewState.RESULTS)}
-                        className="flex items-center gap-2 text-slate-400 hover:text-white mb-2 transition-colors text-sm font-medium"
-                    >
-                        <ArrowLeft size={16} /> Back to Results
-                    </button>
-                    <h2 className="text-3xl font-bold text-white flex items-center gap-3">
-                        <SplitSquareHorizontal className="text-brand-400" />
-                        Archetype Comparison
-                    </h2>
-                </div>
-                
-                <div className="text-right">
-                    <p className="text-slate-400">Comparing <span className="text-white font-bold">{selectedArchetypeIds.size}</span> archetypes</p>
-                </div>
-             </div>
-
-             <ComparisonView archetypes={getSelectedArchetypes()} />
-          </div>
       )}
 
       {view === ViewState.SAVED && (
