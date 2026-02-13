@@ -4,10 +4,9 @@ import InputForm from './components/InputForm';
 import ArchetypeCard from './components/ArchetypeCard';
 import ComparisonView from './components/ComparisonView';
 import SavedArchetypesView from './components/SavedArchetypesView';
-import ApiKeyInput from './components/ApiKeyInput';
 import { generateArchetypesFromData, initializeGemini } from './services/geminiService';
 import { UserArchetype, ViewState, ResearchData } from './types';
-import { ArrowLeft, RefreshCcw, BookOpen, ArrowDown, Search, SplitSquareHorizontal, CheckCircle2, User, Users } from 'lucide-react';
+import { ArrowLeft, RefreshCcw, BookOpen, ArrowDown, Search, SplitSquareHorizontal, CheckCircle2, User, Users, Key, ExternalLink } from 'lucide-react';
 
 const SAMPLE_DATA: ResearchData = {
     title: "Computer Science Students - Study Habits",
@@ -37,6 +36,8 @@ const SAMPLE_ARCHETYPE: UserArchetype = {
 
 const App: React.FC = () => {
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [tempKey, setTempKey] = useState('');
+  
   const [view, setView] = useState<ViewState>(ViewState.INPUT);
   const [archetypes, setArchetypes] = useState<UserArchetype[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -60,24 +61,31 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Initialization Effect
+  // Check for API Key on mount
   useEffect(() => {
-    const storedKey = localStorage.getItem('gemini_api_key');
+    const storedKey = localStorage.getItem('archetype_ai_key');
     if (storedKey) {
-        initializeGemini(storedKey);
-        setApiKey(storedKey);
+      setApiKey(storedKey);
+      initializeGemini(storedKey);
     }
   }, []);
 
-  const handleSetApiKey = (key: string) => {
-      localStorage.setItem('gemini_api_key', key);
-      initializeGemini(key);
-      setApiKey(key);
+  const handleKeySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tempKey.trim()) return;
+    
+    setApiKey(tempKey);
+    localStorage.setItem('archetype_ai_key', tempKey);
+    initializeGemini(tempKey);
   };
 
-  const handleClearApiKey = () => {
-      localStorage.removeItem('gemini_api_key');
+  const handleClearKey = () => {
+    if (window.confirm("Are you sure you want to remove your API key? You will need to enter it again to use the app.")) {
       setApiKey(null);
+      setTempKey('');
+      localStorage.removeItem('archetype_ai_key');
+      setView(ViewState.INPUT);
+    }
   };
 
   const formatPrompt = (data: ResearchData): string => {
@@ -105,11 +113,12 @@ const App: React.FC = () => {
       const results = await generateArchetypesFromData(promptString);
       setArchetypes(results);
       setView(ViewState.RESULTS);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
-      if (err.message === "QUOTA_EXCEEDED") {
-         setError("Service Quota Exceeded. Please try again later or check your API usage.");
-      } else {
-         setError("Failed to generate archetypes. Please ensure you've provided enough detail and check your API key.");
+      setError("Failed to generate archetypes. Please check your API key or ensure you've provided enough detail.");
+      if (err.toString().includes("API key")) {
+          // If key is invalid, maybe prompt to clear it
+          setError("Invalid API Key. Please disconnect and try a different one.");
       }
     } finally {
       setIsLoading(false);
@@ -124,11 +133,7 @@ const App: React.FC = () => {
         setArchetypes(results);
         setSelectedArchetypeIds(new Set()); // Reset selections
     } catch (err: any) {
-        if (err.message === "QUOTA_EXCEEDED") {
-             setError("Service Quota Exceeded. Please try again later.");
-        } else {
-             setError("Failed to regenerate archetypes.");
-        }
+        setError("Failed to regenerate archetypes.");
     } finally {
         setIsLoading(false);
     }
@@ -176,13 +181,79 @@ const App: React.FC = () => {
       if (newView === 'RESULTS' && archetypes.length > 0) setView(ViewState.RESULTS);
   }
 
-  // Render API Key Input if not set
+  // --- API KEY ENTRY VIEW ---
   if (!apiKey) {
-      return <ApiKeyInput onSetKey={handleSetApiKey} />;
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 text-slate-100 font-sans">
+        <div className="bg-ambience"></div>
+        <div className="w-full max-w-md space-y-8 animate-fade-in-up">
+           <div className="text-center">
+              <div className="inline-flex p-3 bg-brand-600 rounded-xl mb-6 shadow-lg shadow-brand-500/20">
+                <Users size={32} className="text-white" />
+              </div>
+              <h1 className="text-3xl font-bold tracking-tight mb-2">
+                Archetype<span className="text-brand-400">AI</span>
+              </h1>
+              <p className="text-slate-400">
+                Research synthesis assistant powered by Gemini.
+              </p>
+           </div>
+
+           <div className="bg-slate-900/50 backdrop-blur-md border border-slate-800 rounded-2xl p-8 shadow-2xl">
+              <form onSubmit={handleKeySubmit} className="space-y-6">
+                <div className="space-y-2">
+                  <label htmlFor="apiKey" className="block text-sm font-medium text-slate-300">
+                    Enter your Gemini API Key
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <Key size={16} className="text-slate-500" />
+                    </div>
+                    <input
+                      id="apiKey"
+                      type="password"
+                      value={tempKey}
+                      onChange={(e) => setTempKey(e.target.value)}
+                      className="block w-full pl-10 pr-3 py-3 border border-slate-700 rounded-lg leading-5 bg-slate-950 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 sm:text-sm text-white transition-colors"
+                      placeholder="AIzaSy..."
+                      required
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={!tempKey}
+                  className="w-full flex justify-center py-3 px-4 border border-transparent text-sm font-bold rounded-lg text-white bg-brand-600 hover:bg-brand-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-brand-500/20"
+                >
+                  Start Synthesizing
+                </button>
+              </form>
+
+              <div className="mt-6 pt-6 border-t border-slate-800 text-center">
+                <p className="text-xs text-slate-500 mb-3">Don't have a key?</p>
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 text-brand-400 hover:text-brand-300 text-sm font-medium transition-colors"
+                >
+                  Get a free key from Google AI Studio <ExternalLink size={12} />
+                </a>
+              </div>
+           </div>
+           
+           <p className="text-center text-xs text-slate-600">
+             Your key is stored locally in your browser and never sent to our servers.
+           </p>
+        </div>
+      </div>
+    );
   }
 
+  // --- MAIN APP ---
   return (
-    <Layout onNavigate={navigateToView} onClearKey={handleClearApiKey}>
+    <Layout onNavigate={navigateToView} onClearKey={handleClearKey}>
       {view === ViewState.INPUT && (
         <div className="space-y-20">
             {/* Hero & Input Section */}
@@ -388,6 +459,31 @@ const App: React.FC = () => {
           </div>
 
         </div>
+      )}
+
+      {view === ViewState.COMPARE && (
+          <div className="space-y-8 animate-fade-in">
+             <div className="border-b border-slate-800 pb-6 flex items-center justify-between">
+                <div>
+                     <button 
+                        onClick={() => setView(ViewState.RESULTS)}
+                        className="flex items-center gap-2 text-slate-400 hover:text-white mb-2 transition-colors text-sm font-medium"
+                    >
+                        <ArrowLeft size={16} /> Back to Results
+                    </button>
+                    <h2 className="text-3xl font-bold text-white flex items-center gap-3">
+                        <SplitSquareHorizontal className="text-brand-400" />
+                        Archetype Comparison
+                    </h2>
+                </div>
+                
+                <div className="text-right">
+                    <p className="text-slate-400">Comparing <span className="text-white font-bold">{selectedArchetypeIds.size}</span> archetypes</p>
+                </div>
+             </div>
+
+             <ComparisonView archetypes={getSelectedArchetypes()} />
+          </div>
       )}
 
       {view === ViewState.SAVED && (

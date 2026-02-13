@@ -16,7 +16,6 @@ const InputForm: React.FC<InputFormProps> = ({ data, onChange, onSubmit, isLoadi
   
   // Feedback State
   const [feedback, setFeedback] = useState<TeacherFeedback | null>(null);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [isGettingFeedback, setIsGettingFeedback] = useState(false);
 
   useEffect(() => {
@@ -46,7 +45,6 @@ const InputForm: React.FC<InputFormProps> = ({ data, onChange, onSubmit, isLoadi
             actions: ''
         });
         setFeedback(null); // Clear feedback on reset
-        setFeedbackError(null);
     }
   };
 
@@ -67,7 +65,6 @@ const InputForm: React.FC<InputFormProps> = ({ data, onChange, onSubmit, isLoadi
                 const parsed = JSON.parse(saved);
                 onChange(parsed);
                 setFeedback(null); // Clear old feedback when loading new data
-                setFeedbackError(null);
             } catch (e) {
                 console.error("Failed to load draft");
             }
@@ -77,23 +74,12 @@ const InputForm: React.FC<InputFormProps> = ({ data, onChange, onSubmit, isLoadi
 
   const handleGetFeedback = async () => {
       setIsGettingFeedback(true);
-      setFeedbackError(null);
-      
-      // Don't clear existing feedback immediately if we want to show it while loading? 
-      // Actually cleaner to clear it to show loading state properly or keep it and show overlay.
-      // Let's clear it to avoid confusion between old and new.
-      setFeedback(null);
-
       try {
           const result = await generateTeacherFeedback(data);
           setFeedback(result);
-      } catch (e: any) {
+      } catch (e) {
           console.error("Failed to get feedback", e);
-          if (e.message === "QUOTA_EXCEEDED") {
-              setFeedbackError("Class is dismissed for now! The professor is overwhelmed (API Quota Exceeded). Please try again in a few minutes.");
-          } else {
-              setFeedbackError("Professor Archetype is currently unavailable. Please try again.");
-          }
+          alert("Professor Archetype is currently unavailable. Please try again.");
       } finally {
           setIsGettingFeedback(false);
       }
@@ -110,14 +96,14 @@ const InputForm: React.FC<InputFormProps> = ({ data, onChange, onSubmit, isLoadi
   };
 
   return (
-    <div className={`w-full mx-auto animate-fade-in-up transition-all duration-500 ease-in-out ${feedback || feedbackError ? 'max-w-[95%]' : 'max-w-6xl'}`}>
+    <div className={`w-full mx-auto animate-fade-in-up transition-all duration-500 ease-in-out ${feedback ? 'max-w-[95%]' : 'max-w-6xl'}`}>
       
       <div className="flex flex-col xl:flex-row gap-6 items-start">
         
         {/* Main Form Section */}
         <div className={`
             bg-slate-800/50 backdrop-blur-xl border border-slate-700 rounded-3xl p-6 sm:p-8 shadow-2xl transition-all duration-500
-            ${feedback || feedbackError ? 'xl:w-2/3 w-full' : 'w-full'}
+            ${feedback ? 'xl:w-2/3 w-full' : 'w-full'}
         `}>
             
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
@@ -165,7 +151,7 @@ const InputForm: React.FC<InputFormProps> = ({ data, onChange, onSubmit, isLoadi
             </div>
             </div>
 
-            <div className={`grid grid-cols-1 ${feedback || feedbackError ? 'lg:grid-cols-2' : 'md:grid-cols-3'} gap-6 mb-8 transition-all duration-500`}>
+            <div className={`grid grid-cols-1 ${feedback ? 'lg:grid-cols-2' : 'md:grid-cols-3'} gap-6 mb-8 transition-all duration-500`}>
             
             {/* Column 1 */}
             <div className="space-y-6">
@@ -345,114 +331,87 @@ const InputForm: React.FC<InputFormProps> = ({ data, onChange, onSubmit, isLoadi
         </div>
         
         {/* Professor Report Card (Side Panel) */}
-        {(feedback || feedbackError) && (
-             <div className={`
-                xl:w-1/3 w-full bg-slate-900 border 
-                ${feedbackError ? 'border-rose-500/50' : 'border-slate-700'} 
-                rounded-3xl p-6 shadow-2xl animate-fade-in flex flex-col gap-6 sticky top-24
-             `}>
-                
-                {feedbackError ? (
-                     <div className="flex flex-col items-center text-center py-6 space-y-6">
-                         <div className="p-4 bg-rose-500/10 rounded-full text-rose-400 border border-rose-500/20">
-                             <AlertTriangle size={32} />
-                         </div>
-                         <div>
-                             <h3 className="text-xl font-bold text-white mb-2">Professor is Unavailable</h3>
-                             <p className="text-slate-400 text-sm leading-relaxed px-4">
-                                 {feedbackError}
-                             </p>
-                         </div>
-                         <button 
-                            onClick={handleGetFeedback}
-                            className="flex items-center gap-2 px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg border border-slate-700 transition-colors font-medium"
-                         >
-                            <Sparkles size={16} /> Try Again
-                         </button>
+        {feedback && (
+             <div className="xl:w-1/3 w-full bg-slate-900 border border-slate-700 rounded-3xl p-6 shadow-2xl animate-fade-in flex flex-col gap-6 sticky top-24">
+                {/* Header with Grade */}
+                <div className="flex items-start justify-between">
+                    <div>
+                        <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                            <GraduationCap className="text-indigo-400" /> 
+                            Professor's Report
+                        </h3>
+                        <p className="text-slate-400 text-sm mt-1">Research Quality Assessment</p>
+                    </div>
+                    <div className={`w-16 h-16 rounded-full border-4 flex items-center justify-center text-3xl font-black bg-slate-950 ${getGradeColor(feedback.grade)}`}>
+                        {feedback.grade}
+                    </div>
+                </div>
+
+                {/* Score Bar */}
+                <div>
+                     <div className="flex justify-between text-xs font-bold uppercase text-slate-500 mb-1">
+                         <span>Research Level</span>
+                         <span>{feedback.score}/100 XP</span>
                      </div>
-                ) : feedback && (
-                    <>
-                        {/* Header with Grade */}
-                        <div className="flex items-start justify-between">
-                            <div>
-                                <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                                    <GraduationCap className="text-indigo-400" /> 
-                                    Professor's Report
-                                </h3>
-                                <p className="text-slate-400 text-sm mt-1">Research Quality Assessment</p>
+                     <div className="w-full bg-slate-800 rounded-full h-3">
+                         <div 
+                            className="bg-indigo-500 h-3 rounded-full transition-all duration-1000 ease-out" 
+                            style={{ width: `${feedback.score}%` }}
+                        ></div>
+                     </div>
+                </div>
+
+                {/* Overall Comment */}
+                <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-xl">
+                    <h4 className="font-bold text-indigo-300 text-sm mb-1">{feedback.feedbackTitle}</h4>
+                    <p className="text-indigo-100 text-sm italic leading-relaxed">"{feedback.overallComment}"</p>
+                </div>
+
+                {/* Strengths */}
+                <div>
+                    <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-400 mb-2">
+                        <Trophy size={14} /> Strengths
+                    </h4>
+                    <ul className="space-y-2">
+                        {feedback.strengths.map((s, i) => (
+                            <li key={i} className="text-sm text-slate-300 flex items-start gap-2">
+                                <span className="text-emerald-500 mt-0.5">•</span> {s}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+
+                {/* Improvements */}
+                <div>
+                    <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400 mb-2">
+                        <Target size={14} /> Areas to Improve
+                    </h4>
+                    <ul className="space-y-2">
+                        {feedback.improvements.map((s, i) => (
+                            <li key={i} className="text-sm text-slate-300 flex items-start gap-2">
+                                <span className="text-amber-500 mt-0.5">•</span> {s}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+
+                {/* Questions */}
+                <div>
+                    <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-brand-400 mb-2">
+                        <Lightbulb size={14} /> Professor asks...
+                    </h4>
+                    <div className="space-y-3">
+                        {feedback.thoughtProvokingQuestions.map((q, i) => (
+                            <div key={i} className="bg-slate-800 p-3 rounded-lg border border-slate-700">
+                                <p className="text-sm text-brand-100 font-medium">{q}</p>
                             </div>
-                            <div className={`w-16 h-16 rounded-full border-4 flex items-center justify-center text-3xl font-black bg-slate-950 ${getGradeColor(feedback.grade)}`}>
-                                {feedback.grade}
-                            </div>
-                        </div>
-
-                        {/* Score Bar */}
-                        <div>
-                             <div className="flex justify-between text-xs font-bold uppercase text-slate-500 mb-1">
-                                 <span>Research Level</span>
-                                 <span>{feedback.score}/100 XP</span>
-                             </div>
-                             <div className="w-full bg-slate-800 rounded-full h-3">
-                                 <div 
-                                    className="bg-indigo-500 h-3 rounded-full transition-all duration-1000 ease-out" 
-                                    style={{ width: `${feedback.score}%` }}
-                                ></div>
-                             </div>
-                        </div>
-
-                        {/* Overall Comment */}
-                        <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-xl">
-                            <h4 className="font-bold text-indigo-300 text-sm mb-1">{feedback.feedbackTitle}</h4>
-                            <p className="text-indigo-100 text-sm italic leading-relaxed">"{feedback.overallComment}"</p>
-                        </div>
-
-                        {/* Strengths */}
-                        <div>
-                            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-400 mb-2">
-                                <Trophy size={14} /> Strengths
-                            </h4>
-                            <ul className="space-y-2">
-                                {feedback.strengths.map((s, i) => (
-                                    <li key={i} className="text-sm text-slate-300 flex items-start gap-2">
-                                        <span className="text-emerald-500 mt-0.5">•</span> {s}
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-
-                        {/* Improvements */}
-                        <div>
-                            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400 mb-2">
-                                <Target size={14} /> Areas to Improve
-                            </h4>
-                            <ul className="space-y-2">
-                                {feedback.improvements.map((s, i) => (
-                                    <li key={i} className="text-sm text-slate-300 flex items-start gap-2">
-                                        <span className="text-amber-500 mt-0.5">•</span> {s}
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-
-                        {/* Questions */}
-                        <div>
-                            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-brand-400 mb-2">
-                                <Lightbulb size={14} /> Professor asks...
-                            </h4>
-                            <div className="space-y-3">
-                                {feedback.thoughtProvokingQuestions.map((q, i) => (
-                                    <div key={i} className="bg-slate-800 p-3 rounded-lg border border-slate-700">
-                                        <p className="text-sm text-brand-100 font-medium">{q}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                        
-                        <div className="text-center pt-2">
-                             <p className="text-xs text-slate-500">Edit your data on the left to improve your grade!</p>
-                        </div>
-                    </>
-                )}
+                        ))}
+                    </div>
+                </div>
+                
+                <div className="text-center pt-2">
+                     <p className="text-xs text-slate-500">Edit your data on the left to improve your grade!</p>
+                </div>
              </div>
         )}
 
