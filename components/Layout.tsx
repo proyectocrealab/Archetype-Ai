@@ -1,12 +1,14 @@
 import React, { ReactNode } from 'react';
-import { Users, GraduationCap, Library, LayoutGrid } from 'lucide-react';
+import { Users, GraduationCap, Library, LayoutGrid, Key } from 'lucide-react';
 
 interface LayoutProps {
   children: ReactNode;
   onNavigate?: (view: any) => void;
+  onOpenKeySettings?: () => void;
+  isKeyActive?: boolean;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, onNavigate }) => {
+const Layout: React.FC<LayoutProps> = ({ children, onNavigate, onOpenKeySettings, isKeyActive }) => {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col text-slate-100 font-sans selection:bg-brand-500/30 selection:text-brand-100">
       
@@ -23,6 +25,22 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate }) => {
                 <span className="text-[10px] text-slate-400 font-medium block mt-0.5 tracking-tight">made by Arturo Zamora</span>
             </div>
           </button>
+
+          {/* User Requested API Key Button Area */}
+          <div className="hidden md:flex flex-1 justify-center px-4">
+            <button 
+              onClick={onOpenKeySettings}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full border transition-all text-xs font-bold uppercase tracking-wider
+                ${isKeyActive 
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' 
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
+                }`}
+            >
+              <Key size={14} />
+              <span>{isKeyActive ? 'API Key Active' : 'Configure API Key'}</span>
+              <div className={`w-2 h-2 rounded-full ${isKeyActive ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></div>
+            </button>
+          </div>
           
           <nav className="flex items-center gap-2 sm:gap-6">
             <button 
@@ -42,6 +60,13 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate }) => {
                 className="text-xs sm:text-sm font-medium text-slate-400 hover:text-white transition-colors flex items-center gap-2 px-2 py-1"
             >
                 <Library size={16} /> <span className="hidden sm:inline">Library</span>
+            </button>
+            {/* Mobile API Key Trigger */}
+            <button 
+                onClick={onOpenKeySettings}
+                className="md:hidden p-2 text-slate-400 hover:text-white"
+            >
+                <Key size={18} />
             </button>
           </nav>
         </div>

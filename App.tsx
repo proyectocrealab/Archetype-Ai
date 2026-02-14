@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import Layout from './components/Layout';
 import InputForm from './components/InputForm';
@@ -8,9 +7,9 @@ import SavedArchetypesView from './components/SavedArchetypesView';
 import BootcampView from './components/BootcampView';
 import { generateArchetypesFromData } from './services/geminiService';
 import { UserArchetype, ViewState, ResearchData, ResearchFramework } from './types';
-import { ArrowLeft, RefreshCcw, Search, Sparkles, GraduationCap, AlertCircle, Users, BookOpen, Edit3, Image as ImageIcon, Save, Info, Library } from 'lucide-react';
+import { ArrowLeft, RefreshCcw, Search, Sparkles, GraduationCap, AlertCircle, Users, BookOpen, Edit3, Image as ImageIcon, Save, Info, Library, Key, ArrowRight, CheckCircle2, X } from 'lucide-react';
+import { GoogleGenAI } from "@google/genai";
 
-// Fix: Declare AIStudio and match the Window interface modifiers to resolve TypeScript conflicts.
 declare global {
   interface AIStudio {
     hasSelectedApiKey: () => Promise<boolean>;
@@ -19,6 +18,7 @@ declare global {
 
   interface Window {
     aistudio?: AIStudio;
+    process?: any;
   }
 }
 
@@ -44,27 +44,98 @@ const App: React.FC = () => {
   });
   const [error, setError] = useState<string | null>(null);
   const [apiKeySelected, setApiKeySelected] = useState<boolean | null>(null);
+  const [manualKey, setManualKey] = useState('');
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationResult, setValidationResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Setup process.env if it doesn't exist for runtime key injection
+  useEffect(() => {
+    if (!window.process) window.process = { env: {} };
+    if (!window.process.env) window.process.env = {};
+  }, []);
 
   useEffect(() => {
     const checkKey = async () => {
-      // Use window.aistudio.hasSelectedApiKey() to check whether an API key has been selected.
+      // Prioritize manually entered key in local storage
+      const savedKey = localStorage.getItem('ARCHETYPE_AI_GEMINI_KEY');
+      if (savedKey && savedKey !== 'undefined' && savedKey !== 'null') {
+        window.process.env.API_KEY = savedKey;
+        setManualKey(savedKey);
+        setApiKeySelected(true);
+        return;
+      }
+
+      // 1. Check build-time environment variable
+      if (process.env.API_KEY && process.env.API_KEY !== 'undefined' && process.env.API_KEY !== 'null') {
+        setApiKeySelected(true);
+        return;
+      }
+
+      // 2. Check AI Studio specialized environment
       if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
         const selected = await window.aistudio.hasSelectedApiKey();
         setApiKeySelected(selected);
       } else {
-        setApiKeySelected(true); // Fallback for environments without aistudio
+        // No key found anywhere, show the input screen
+        setApiKeySelected(false);
       }
     };
     checkKey();
   }, []);
 
-  const handleSelectKey = async () => {
-    // Call openSelectKey() to open a dialog for the user to select their API key.
+  const handleSelectKeyFromStudio = async () => {
     if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
       await window.aistudio.openSelectKey();
-      // Assume success after triggering the dialog to handle race condition as per guidelines.
       setApiKeySelected(true);
     }
+  };
+
+  const validateKey = async (key: string) => {
+    if (!key.trim()) return;
+    setIsValidating(true);
+    setValidationResult(null);
+    try {
+      const ai = new GoogleGenAI({ apiKey: key.trim() });
+      // Use a simple prompt to verify the key works
+      await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: "hi",
+        config: { maxOutputTokens: 5 }
+      });
+      setValidationResult({ success: true, message: "Key verified successfully!" });
+      return true;
+    } catch (e: any) {
+      setValidationResult({ 
+        success: false, 
+        message: e.message?.includes("403") ? "Invalid API Key." : "Connection error. Please try again." 
+      });
+      return false;
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  const handleManualKeySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanKey = manualKey.trim();
+    if (cleanKey) {
+      const isValid = await validateKey(cleanKey);
+      if (isValid) {
+        localStorage.setItem('ARCHETYPE_AI_GEMINI_KEY', cleanKey);
+        window.process.env.API_KEY = cleanKey;
+        setApiKeySelected(true);
+        setIsKeyModalOpen(false);
+      }
+    }
+  };
+
+  const handleClearKey = () => {
+    localStorage.removeItem('ARCHETYPE_AI_GEMINI_KEY');
+    window.process.env.API_KEY = undefined;
+    setManualKey('');
+    setApiKeySelected(false);
+    setValidationResult(null);
   };
 
   const handleGenerate = async () => {
@@ -74,7 +145,6 @@ const App: React.FC = () => {
       const results = await generateArchetypesFromData(inputData);
       setArchetypes(results);
       
-      // Auto-save the framework to the library when generating
       if (results.length > 0) {
         const frameworkId = results[0].frameworkId || `fw-${Date.now()}`;
         const newFramework: ResearchFramework = {
@@ -93,10 +163,11 @@ const App: React.FC = () => {
       setView(ViewState.RESULTS);
       window.scrollTo(0,0);
     } catch (err: any) {
-      // If the request fails with 'Requested entity was not found.', reset the key selection state.
-      if (err.message?.includes("Requested entity was not found")) {
+      if (err.message?.includes("Requested entity was not found") || err.message?.includes("API_KEY_INVALID")) {
+        localStorage.removeItem('ARCHETYPE_AI_GEMINI_KEY');
         setApiKeySelected(false);
-        setError("API Key error. Please re-select your key.");
+        setIsKeyModalOpen(true);
+        setError("API Key invalid. Please check your settings.");
       } else {
         setError(err.message?.includes("429") ? "Free tier limit hit. Please wait a minute." : "Generation failed.");
       }
@@ -112,40 +183,117 @@ const App: React.FC = () => {
     else setView(ViewState.RESULTS);
   };
 
-  if (apiKeySelected === false) {
+  // Shared Key Modal / Setup UI
+  const KeyManagementUI = ({ isFullPage = false }) => (
+    <div className={`${isFullPage ? 'max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-8 shadow-2xl animate-fade-in-up' : 'w-full space-y-6 text-center'}`}>
+      <div className="bg-brand-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-brand-600/20">
+        <Key size={32} className="text-white" />
+      </div>
+      <div className="space-y-2">
+        <h1 className="text-3xl font-black text-white tracking-tight">Archetype <span className="text-brand-400">AI</span></h1>
+        <p className="text-slate-400 text-sm leading-relaxed">
+          Please provide a Google Gemini API key to start synthesizing behavioral data.
+        </p>
+      </div>
+
+      <form onSubmit={handleManualKeySubmit} className="space-y-4">
+        <div className="relative">
+          <input 
+            type="password" 
+            placeholder="Paste your Gemini API Key..." 
+            className={`w-full bg-slate-950 border rounded-xl px-4 py-4 text-white placeholder-slate-600 transition-all outline-none 
+              ${validationResult?.success ? 'border-emerald-500 ring-1 ring-emerald-500' : 'border-slate-700 focus:border-brand-500 focus:ring-1 focus:ring-brand-500'}`}
+            value={manualKey}
+            onChange={(e) => setManualKey(e.target.value)}
+            required
+          />
+          {validationResult && (
+            <div className={`mt-2 text-xs font-bold flex items-center justify-center gap-1.5 ${validationResult.success ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {validationResult.success ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+              {validationResult.message}
+            </div>
+          )}
+        </div>
+        
+        <div className="flex gap-2">
+           <button 
+            type="submit"
+            disabled={isValidating}
+            className="flex-1 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-brand-600/20 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {isValidating ? <RefreshCcw className="animate-spin" size={18} /> : (apiKeySelected ? 'Update Key' : 'Get Started')}
+            {!isValidating && <ArrowRight size={18} />}
+          </button>
+          {apiKeySelected && (
+            <button 
+              type="button"
+              onClick={handleClearKey}
+              className="px-4 py-4 bg-slate-800 hover:bg-rose-900/20 text-slate-400 hover:text-rose-400 rounded-xl transition-all border border-slate-700"
+              title="Remove Key"
+            >
+              <X size={20} />
+            </button>
+          )}
+        </div>
+      </form>
+
+      {window.aistudio && (
+        <div className="pt-2">
+          <button 
+            onClick={handleSelectKeyFromStudio}
+            className="text-xs font-bold text-slate-500 hover:text-brand-400 transition-colors uppercase tracking-widest"
+          >
+            Or use AI Studio Key Selection
+          </button>
+        </div>
+      )}
+
+      <div className="pt-4 border-t border-slate-800">
+        <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+          Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">Google AI Studio</a>. 
+          Standard free tier limits apply.
+        </p>
+      </div>
+    </div>
+  );
+
+  if (apiKeySelected === false && !isKeyModalOpen) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 selection:bg-brand-500/30">
-        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-8 shadow-2xl animate-fade-in-up">
-          <div className="bg-brand-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-brand-600/20">
-            <Users size={32} className="text-white" />
-          </div>
-          <div className="space-y-2">
-            <h1 className="text-3xl font-black text-white tracking-tight">Archetype <span className="text-brand-400">AI</span></h1>
-            <p className="text-slate-400 text-sm leading-relaxed">
-              To start synthesizing behavioral data, please select your Google Gemini API key. 
-              A free or paid key from your own account is required.
-            </p>
-          </div>
-          <div className="space-y-4">
-            <button 
-              onClick={handleSelectKey}
-              className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-brand-600/20 active:scale-95"
-            >
-              Select API Key
-            </button>
-            <p className="text-[10px] text-slate-500 font-medium">
-              Don't have a key? <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">Learn about billing and setup</a>.
-            </p>
-          </div>
-        </div>
+        <KeyManagementUI isFullPage={true} />
       </div>
     );
   }
 
-  if (apiKeySelected === null) return null;
+  if (apiKeySelected === null) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <RefreshCcw size={40} className="text-brand-500 animate-spin" />
+      </div>
+    );
+  }
 
   return (
-    <Layout onNavigate={navigateToView}>
+    <Layout 
+      onNavigate={navigateToView} 
+      onOpenKeySettings={() => setIsKeyModalOpen(true)}
+      isKeyActive={apiKeySelected === true}
+    >
+      {/* API Key Modal */}
+      {isKeyModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+          <div className="max-w-md w-full bg-slate-900 border border-slate-700 rounded-3xl p-8 shadow-2xl relative">
+            <button 
+              onClick={() => setIsKeyModalOpen(false)}
+              className="absolute top-4 right-4 text-slate-500 hover:text-white transition-colors"
+            >
+              <X size={24} />
+            </button>
+            <KeyManagementUI />
+          </div>
+        </div>
+      )}
+
       {view === ViewState.INPUT && (
         <div className="max-w-6xl mx-auto space-y-12">
             <div className="flex flex-col items-center space-y-6">
