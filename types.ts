@@ -12,9 +12,20 @@ export interface UserArchetype {
   personalityTraits: string[];
   imageUrl?: string; // Optional, populated later
   imagePrompt?: string; // For generating the image
-  tags?: string[]; // For organization
+  category?: string; // Explicit category based on stakeholder/dept
+  tags?: string[]; // For behavioral organization
   notes?: string; // For user notes
   savedAt?: string; // ISO Date string
+  researcherName?: string; // Metadata for tracking
+  teamName?: string; // Metadata for tracking
+  sourceResearch?: ResearchData; // Original framework data for display
+  frameworkId?: string; // Reference to the parent framework card
+}
+
+export interface ResearchFramework extends ResearchData {
+  id: string;
+  savedAt: string;
+  archetypeIds: string[]; // List of archetypes generated from this framework
 }
 
 export interface GenerationState {
@@ -27,13 +38,15 @@ export enum ViewState {
   INPUT = 'INPUT',
   RESULTS = 'RESULTS',
   COMPARE = 'COMPARE',
-  SAVED = 'SAVED'
+  SAVED = 'SAVED',
+  BOOTCAMP = 'BOOTCAMP'
 }
 
 export interface ResearchData {
   title: string;
-  studentName: string;
+  researcherName: string;
   teamName: string;
+  stakeholderTag: string;
   description: string;
   painPoints: string;
   needs: string;

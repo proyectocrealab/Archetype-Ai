@@ -1,24 +1,39 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { UserArchetype, ResearchData, TeacherFeedback } from "../types";
 
-let ai: GoogleGenAI | null = null;
+// Global queue to serialize heavy requests (especially images) to stay within Free Tier limits
+let apiQueue: Promise<any> = Promise.resolve();
 
-export const initializeGemini = (apiKey: string) => {
-  ai = new GoogleGenAI({ apiKey });
-};
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-export const hasApiKey = (): boolean => {
-  return !!ai;
-};
+/**
+ * Helper to handle retries and rate limiting (429 errors)
+ * Optimized for Free Tier limits by using longer exponential backoff
+ */
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  retries: number = 3,
+  baseDelay: number = 6000 // Slightly higher base delay for free tier
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error: any) {
+    const isQuotaError =
+      error?.status === 429 ||
+      error?.code === 429 ||
+      (error?.message && error.message.includes('429')) ||
+      (error?.message && error.message.toLowerCase().includes('quota')) ||
+      (error?.message && error.message.toLowerCase().includes('resource_exhausted'));
 
-const getAI = () => {
-  if (!ai) {
-    throw new Error("API Key not set. Please enter your Gemini API Key.");
+    if (isQuotaError && retries > 0) {
+      console.warn(`Free Tier Rate limit hit. Retrying in ${baseDelay}ms...`);
+      await delay(baseDelay);
+      return withRetry(operation, retries - 1, baseDelay * 2);
+    }
+    throw error;
   }
-  return ai;
-};
+}
 
-// Schema definition for the archetypes
 const archetypeSchema = {
   type: Type.OBJECT,
   properties: {
@@ -27,180 +42,151 @@ const archetypeSchema = {
       items: {
         type: Type.OBJECT,
         properties: {
-          name: { type: Type.STRING, description: "A realistic full name for the persona." },
-          role: { type: Type.STRING, description: "Job title or primary role (e.g., 'Busy Parent', 'Senior Developer')." },
-          age: { type: Type.INTEGER, description: "Age of the persona." },
-          quote: { type: Type.STRING, description: "A characteristic quote that captures their attitude." },
-          bio: { type: Type.STRING, description: "A short biography (2-3 sentences)." },
-          goals: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING },
-            description: "3-5 key goals or needs." 
-          },
-          frustrations: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING },
-            description: "3-5 key pain points or frustrations." 
-          },
-          motivations: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING },
-            description: "3 key drivers for their behavior." 
-          },
-          techLiteracy: { type: Type.INTEGER, description: "Score from 1 (Low) to 10 (High)." },
-          personalityTraits: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING },
-            description: "4-5 adjectives describing personality (e.g., 'Analytical', 'Impulsive')." 
-          },
-          imagePrompt: { type: Type.STRING, description: "A detailed physical description to generate a photorealistic headshot." }
+          name: { type: Type.STRING },
+          role: { type: Type.STRING },
+          age: { type: Type.INTEGER },
+          quote: { type: Type.STRING },
+          bio: { type: Type.STRING },
+          goals: { type: Type.ARRAY, items: { type: Type.STRING } },
+          frustrations: { type: Type.ARRAY, items: { type: Type.STRING } },
+          motivations: { type: Type.ARRAY, items: { type: Type.STRING } },
+          techLiteracy: { type: Type.INTEGER },
+          personalityTraits: { type: Type.ARRAY, items: { type: Type.STRING } },
+          imagePrompt: { type: Type.STRING },
+          tags: { type: Type.ARRAY, items: { type: Type.STRING } }
         },
-        required: ["name", "role", "age", "quote", "bio", "goals", "frustrations", "motivations", "techLiteracy", "personalityTraits", "imagePrompt"]
+        required: ["name", "role", "age", "quote", "bio", "goals", "frustrations", "motivations", "techLiteracy", "personalityTraits", "imagePrompt", "tags"]
       }
     }
   },
   required: ["archetypes"]
 };
 
-// Schema for Teacher Feedback
 const feedbackSchema = {
   type: Type.OBJECT,
   properties: {
-    grade: { type: Type.STRING, description: "A letter grade (A+, A, B, C, D, F) based on the depth and quality of the research notes." },
-    score: { type: Type.INTEGER, description: "A numeric score from 0-100." },
-    feedbackTitle: { type: Type.STRING, description: "A short, punchy title for the feedback (e.g., 'Great behavioral insights!', 'Dig deeper into motivations')." },
-    strengths: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING },
-      description: "2-3 bullet points highlighting what the student did well." 
-    },
-    improvements: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING },
-      description: "2-3 specific, actionable tips to improve the data quality." 
-    },
-    thoughtProvokingQuestions: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING },
-      description: "2 questions that challenge the student to think deeper about their users." 
-    },
-    overallComment: { type: Type.STRING, description: "A short, encouraging paragraph from the professor's perspective." }
+    grade: { type: Type.STRING },
+    score: { type: Type.INTEGER },
+    feedbackTitle: { type: Type.STRING },
+    strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+    improvements: { type: Type.ARRAY, items: { type: Type.STRING } },
+    thoughtProvokingQuestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+    overallComment: { type: Type.STRING }
   },
   required: ["grade", "score", "feedbackTitle", "strengths", "improvements", "thoughtProvokingQuestions", "overallComment"]
 };
 
-export const generateArchetypesFromData = async (inputData: string): Promise<UserArchetype[]> => {
-  try {
-    const response = await getAI().models.generateContent({
-      model: 'gemini-3-flash-preview', // Switched to flash for speed/cost effectiveness on free tier
-      contents: `
-        You are an expert User Researcher and UX Designer. 
-        Analyze the following raw research data (interview notes, survey responses, or descriptions) and synthesize it into distinct User Archetypes.
-        Focus on behavioral patterns, goals, and pain points.
-        
-        Raw Data:
-        "${inputData}"
-        
-        Generate 2 to 4 distinct archetypes that represent the key segments found in this data.
-      `,
+/**
+ * Generate Archetypes from research data.
+ */
+export const generateArchetypesFromData = async (data: ResearchData): Promise<UserArchetype[]> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  return withRetry(async () => {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview', 
+      contents: [{ parts: [{ text: `Synthesize this research data into 2-4 distinct behavioral User Archetypes. Ensure names are evocative. Data: "${JSON.stringify(data)}"` }] }],
       config: {
         responseMimeType: "application/json",
         responseSchema: archetypeSchema,
-        systemInstruction: "You are a precise and insightful UX researcher. Create realistic, empathetic, and useful personas."
+        systemInstruction: "You are a world-class senior UX researcher. Synthesize behavioral patterns into archetypes. Avoid demographic tropes. Focus on 'How' and 'Why'. For 'tags', use concise behavioral labels.",
+        temperature: 0.2
       }
     });
 
-    const text = response.text;
-    if (!text) throw new Error("No response from AI");
+    const parsed = JSON.parse(response.text || '{}');
+    const frameworkId = `fw-${Date.now()}`;
 
-    const parsed = JSON.parse(text);
-    
-    // Add local IDs
-    return parsed.archetypes.map((arch: any, index: number) => ({
+    return (parsed.archetypes || []).map((arch: any, index: number) => ({
       ...arch,
+      category: data.stakeholderTag.trim() || "General",
+      researcherName: data.researcherName,
+      teamName: data.teamName,
+      sourceResearch: data,
+      frameworkId: frameworkId,
       id: `arch-${Date.now()}-${index}`
     }));
-
-  } catch (error) {
-    console.error("Error generating archetypes:", error);
-    throw error;
-  }
+  });
 };
 
-export const generateTeacherFeedback = async (data: ResearchData): Promise<TeacherFeedback> => {
-  try {
-    const response = await getAI().models.generateContent({
+/**
+ * Evaluate research data for quality.
+ * Optimized for maximum consistency and fair progress tracking.
+ */
+export const generateTeacherFeedback = async (data: ResearchData, previousFeedback?: TeacherFeedback | null): Promise<TeacherFeedback> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const promptContext = previousFeedback 
+    ? `The student previously received an assessment with the following improvement points: ${JSON.stringify(previousFeedback.improvements)}. 
+       Current Score: ${previousFeedback.score}.
+       
+       Task:
+       1. Check if the student addressed the improvement points in their new data: ${JSON.stringify(data)}.
+       2. For every point addressed, REMOVE it from the improvements list and INCREASE the score.
+       3. DO NOT add new improvement points if the original list is being cleared. The goal is to reach 100 XP.
+       4. If all points are addressed and content is robust, set score to 100 and Grade to A+.`
+    : `Strictly evaluate these research notes based on the provided grading rubric. Data: ${JSON.stringify(data)}`;
+
+  return withRetry(async () => {
+    const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `
-        You are "Professor Archetype", a supportive but rigorous UX Design professor at a top design university.
-        A student has just submitted their initial research notes for their User Archetype project.
-        
-        Student: ${data.studentName}
-        Team: ${data.teamName}
-        
-        Your goal is to gamify their progress. Review their notes for depth, specificity, and empathy.
-        Address the student by name if possible.
-        
-        Criteria for grading:
-        - Specificity: Are there specific details or just generalizations?
-        - Separation: Did they actually list behaviors in "Actions" and drivers in "Motivations"?
-        - Empathy: Do they understand the user's pain?
-        - Completeness: Is there enough data to build a persona?
-
-        Student's Work:
-        Title: ${data.title}
-        Description: ${data.description}
-        Pain Points: ${data.painPoints}
-        Needs: ${data.needs}
-        Goals: ${data.goals}
-        Actions: ${data.actions}
-
-        Provide constructive feedback, a grade, and questions to inspire them to edit and improve their notes before generating the final personas.
-      `,
+      contents: [{ parts: [{ text: promptContext }] }],
       config: {
         responseMimeType: "application/json",
         responseSchema: feedbackSchema,
-        systemInstruction: "You are a gamified tutor. Be energetic, encouraging, but honest about gaps in the research."
+        temperature: 0, // Deterministic output
+        seed: 42,       // Fixed seed for repeatable results
+        systemInstruction: `You are a rigorous UX Research Professor. Evaluate work with extreme consistency.
+        
+        GRADING RUBRIC:
+        - XP Score (0-100):
+          - 0-30: Critically Underspecified. Single words or empty fields. (Grade: F)
+          - 31-50: Superficial. Demographic assumptions or obvious tropes. (Grade: D or C-)
+          - 51-70: Competent. Clear descriptions and distinct pain points. (Grade: C or B-)
+          - 71-85: High Quality. Deep behavioral observations. (Grade: B+ or A-)
+          - 86-100: Exceptional. Professional agency report quality. (Grade: A or A+)
+
+        OBJECTIVE TRACKING:
+        - If 'previousFeedback' is provided, your job is to track the student's progress against the flagged 'improvements'.
+        - If they addressed an improvement point, reward them by removing it and raising the score.
+        - DO NOT invent new issues if they are improving existing ones. Let them reach 100.
+        - If the data hasn't changed, the score and grade MUST remain identical to the previous assessment.`
       }
     });
-
-    const text = response.text;
-    if (!text) throw new Error("No response from AI");
-
-    return JSON.parse(text) as TeacherFeedback;
-
-  } catch (error) {
-    console.error("Error generating feedback:", error);
-    throw error;
-  }
+    return JSON.parse(response.text || '{}');
+  });
 };
 
+/**
+ * Generate a persona portrait.
+ */
 export const generatePersonaImage = async (prompt: string): Promise<string> => {
-  try {
-    const response = await getAI().models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [{
-          text: `A high-quality, professional headshot of: ${prompt}. Photorealistic, neutral lighting, solid color background, looking at camera. 4k resolution.`
-        }]
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "1:1",
+  const task = async () => {
+    // 5s gap for safety on Free Tier RPM
+    await delay(5000);
+    
+    return await withRetry(async () => {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: [{ parts: [{ text: `Professional studio headshot, cinematic lighting, neutral office background, highly detailed: ${prompt}` }] }],
+        config: {
+          imageConfig: { aspectRatio: "1:1" }
+        }
+      });
+
+      const candidate = response.candidates?.[0];
+      if (candidate?.content?.parts) {
+        for (const part of candidate.content.parts) {
+          if (part.inlineData) {
+            return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          }
         }
       }
-    });
+      throw new Error("No image part returned.");
+    }, 2, 7000);
+  };
 
-    // Extract image from parts
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) {
-        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-      }
-    }
-    
-    throw new Error("No image generated");
-  } catch (error) {
-    console.error("Error generating image:", error);
-    throw error;
-  }
+  const execution = apiQueue.then(() => task());
+  apiQueue = execution.then(() => {}).catch(() => {});
+  return execution;
 };

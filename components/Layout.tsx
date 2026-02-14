@@ -1,13 +1,12 @@
 import React, { ReactNode } from 'react';
-import { Users, LogOut } from 'lucide-react';
+import { Users, GraduationCap, Library, LayoutGrid } from 'lucide-react';
 
 interface LayoutProps {
   children: ReactNode;
   onNavigate?: (view: any) => void;
-  onClearKey?: () => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, onNavigate, onClearKey }) => {
+const Layout: React.FC<LayoutProps> = ({ children, onNavigate }) => {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col text-slate-100 font-sans selection:bg-brand-500/30 selection:text-brand-100">
       
@@ -21,27 +20,29 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, onClearKey }) => 
                 <h1 className="text-xl font-bold tracking-tight text-white leading-none">
                 Archetype<span className="text-brand-400">AI</span>
                 </h1>
-                <span className="text-[10px] text-slate-400 font-medium block mt-0.5">made by Arturo Zamora</span>
+                <span className="text-[10px] text-slate-400 font-medium block mt-0.5 tracking-tight">made by Arturo Zamora</span>
             </div>
           </button>
-          <nav className="flex items-center gap-6">
+          
+          <nav className="flex items-center gap-2 sm:gap-6">
+            <button 
+                onClick={() => onNavigate && onNavigate('INPUT')}
+                className="text-xs sm:text-sm font-medium text-slate-400 hover:text-brand-400 transition-colors flex items-center gap-2 px-2 py-1"
+            >
+                <LayoutGrid size={16} /> <span className="hidden sm:inline">Dashboard</span>
+            </button>
+            <button 
+                onClick={() => onNavigate && onNavigate('BOOTCAMP')}
+                className="text-xs sm:text-sm font-medium text-slate-400 hover:text-brand-400 transition-colors flex items-center gap-2 px-2 py-1"
+            >
+                <GraduationCap size={16} /> <span className="hidden sm:inline">Bootcamp</span>
+            </button>
             <button 
                 onClick={() => onNavigate && onNavigate('SAVED')}
-                className="text-sm font-medium text-slate-400 hover:text-white transition-colors flex items-center gap-2"
+                className="text-xs sm:text-sm font-medium text-slate-400 hover:text-white transition-colors flex items-center gap-2 px-2 py-1"
             >
-                My Library
+                <Library size={16} /> <span className="hidden sm:inline">Library</span>
             </button>
-            
-            {onClearKey && (
-              <button
-                onClick={onClearKey}
-                className="text-xs font-medium text-slate-500 hover:text-rose-400 transition-colors flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-slate-800 hover:border-rose-900/50 hover:bg-rose-950/20"
-                title="Disconnect API Key"
-              >
-                <LogOut size={12} />
-                Exit
-              </button>
-            )}
           </nav>
         </div>
       </header>
