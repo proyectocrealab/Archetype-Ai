@@ -7,7 +7,7 @@ import SavedArchetypesView from './components/SavedArchetypesView';
 import BootcampView from './components/BootcampView';
 import { generateArchetypesFromData } from './services/geminiService';
 import { UserArchetype, ViewState, ResearchData, ResearchFramework } from './types';
-import { ArrowLeft, RefreshCcw, Search, Sparkles, GraduationCap, AlertCircle, Users, BookOpen, Edit3, Image as ImageIcon, Save, Info, Library, Key, ArrowRight, CheckCircle2, X } from 'lucide-react';
+import { ArrowLeft, RefreshCcw, Sparkles, GraduationCap, AlertCircle, Users, BookOpen, Library, Key, ArrowRight, CheckCircle2, X } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 
 declare global {
@@ -20,6 +20,12 @@ declare global {
     aistudio?: AIStudio;
     process?: any;
   }
+}
+
+// Polyfill process.env for runtime usage of manually entered keys
+if (typeof window !== 'undefined') {
+  window.process = window.process || {};
+  window.process.env = window.process.env || {};
 }
 
 const SAMPLE_DATA: ResearchData = {
@@ -49,37 +55,35 @@ const App: React.FC = () => {
   const [isValidating, setIsValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  // Setup process.env if it doesn't exist for runtime key injection
-  useEffect(() => {
-    if (!window.process) window.process = { env: {} };
-    if (!window.process.env) window.process.env = {};
-  }, []);
-
   useEffect(() => {
     const checkKey = async () => {
-      // Prioritize manually entered key in local storage
+      // 1. Check local storage first (User's manual entry)
       const savedKey = localStorage.getItem('ARCHETYPE_AI_GEMINI_KEY');
-      if (savedKey && savedKey !== 'undefined' && savedKey !== 'null') {
-        window.process.env.API_KEY = savedKey;
-        setManualKey(savedKey);
+      if (savedKey && savedKey.trim().length > 10 && savedKey !== 'undefined') {
+        window.process.env.API_KEY = savedKey.trim();
+        setManualKey(savedKey.trim());
         setApiKeySelected(true);
         return;
       }
 
-      // 1. Check build-time environment variable
-      if (process.env.API_KEY && process.env.API_KEY !== 'undefined' && process.env.API_KEY !== 'null') {
+      // 2. Check for a valid-looking injected process.env key
+      const envKey = process.env.API_KEY;
+      if (envKey && typeof envKey === 'string' && envKey.length > 10 && envKey !== 'undefined' && envKey !== 'null') {
         setApiKeySelected(true);
         return;
       }
 
-      // 2. Check AI Studio specialized environment
+      // 3. Check AI Studio specialized environment
       if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
         const selected = await window.aistudio.hasSelectedApiKey();
-        setApiKeySelected(selected);
-      } else {
-        // No key found anywhere, show the input screen
-        setApiKeySelected(false);
+        if (selected) {
+            setApiKeySelected(true);
+            return;
+        }
       }
+
+      // Default to asking for a key
+      setApiKeySelected(false);
     };
     checkKey();
   }, []);
@@ -92,23 +96,26 @@ const App: React.FC = () => {
   };
 
   const validateKey = async (key: string) => {
-    if (!key.trim()) return;
+    if (!key || key.trim().length < 10) {
+        setValidationResult({ success: false, message: "Key looks too short." });
+        return false;
+    }
     setIsValidating(true);
     setValidationResult(null);
     try {
       const ai = new GoogleGenAI({ apiKey: key.trim() });
-      // Use a simple prompt to verify the key works
       await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: "hi",
-        config: { maxOutputTokens: 5 }
+        contents: "Connection test",
+        config: { maxOutputTokens: 2 }
       });
-      setValidationResult({ success: true, message: "Key verified successfully!" });
+      setValidationResult({ success: true, message: "Key accepted and active!" });
       return true;
     } catch (e: any) {
+      console.error("Key validation failed", e);
       setValidationResult({ 
         success: false, 
-        message: e.message?.includes("403") ? "Invalid API Key." : "Connection error. Please try again." 
+        message: e.message?.includes("403") || e.message?.includes("invalid") ? "Invalid API Key." : "Connection failed. Check your network." 
       });
       return false;
     } finally {
@@ -125,14 +132,15 @@ const App: React.FC = () => {
         localStorage.setItem('ARCHETYPE_AI_GEMINI_KEY', cleanKey);
         window.process.env.API_KEY = cleanKey;
         setApiKeySelected(true);
-        setIsKeyModalOpen(false);
+        // Add a small delay so user can see the "Verified" feedback
+        setTimeout(() => setIsKeyModalOpen(false), 800);
       }
     }
   };
 
   const handleClearKey = () => {
     localStorage.removeItem('ARCHETYPE_AI_GEMINI_KEY');
-    window.process.env.API_KEY = undefined;
+    if (window.process) window.process.env.API_KEY = undefined;
     setManualKey('');
     setApiKeySelected(false);
     setValidationResult(null);
@@ -163,13 +171,13 @@ const App: React.FC = () => {
       setView(ViewState.RESULTS);
       window.scrollTo(0,0);
     } catch (err: any) {
-      if (err.message?.includes("Requested entity was not found") || err.message?.includes("API_KEY_INVALID")) {
-        localStorage.removeItem('ARCHETYPE_AI_GEMINI_KEY');
+      const msg = err.message || "";
+      if (msg.includes("API_KEY_INVALID") || msg.includes("403") || msg.includes("invalid_key")) {
         setApiKeySelected(false);
         setIsKeyModalOpen(true);
-        setError("API Key invalid. Please check your settings.");
+        setError("Invalid API Key. Please update it to continue.");
       } else {
-        setError(err.message?.includes("429") ? "Free tier limit hit. Please wait a minute." : "Generation failed.");
+        setError(msg.includes("429") ? "Free tier quota exceeded. Please wait a minute." : "Generation failed.");
       }
     } finally {
       setIsLoading(false);
@@ -183,7 +191,6 @@ const App: React.FC = () => {
     else setView(ViewState.RESULTS);
   };
 
-  // Shared Key Modal / Setup UI
   const KeyManagementUI = ({ isFullPage = false }) => (
     <div className={`${isFullPage ? 'max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-8 shadow-2xl animate-fade-in-up' : 'w-full space-y-6 text-center'}`}>
       <div className="bg-brand-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-brand-600/20">
@@ -192,23 +199,28 @@ const App: React.FC = () => {
       <div className="space-y-2">
         <h1 className="text-3xl font-black text-white tracking-tight">Archetype <span className="text-brand-400">AI</span></h1>
         <p className="text-slate-400 text-sm leading-relaxed">
-          Please provide a Google Gemini API key to start synthesizing behavioral data.
+          Unlock AI synthesis by providing your own Gemini API key. 
+          Free keys work perfectly for this application.
         </p>
       </div>
 
-      <form onSubmit={handleManualKeySubmit} className="space-y-4">
+      <form onSubmit={handleManualKeySubmit} className="space-y-4 text-left">
         <div className="relative">
+          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1 mb-1.5 block">Your Gemini API Key</label>
           <input 
             type="password" 
-            placeholder="Paste your Gemini API Key..." 
-            className={`w-full bg-slate-950 border rounded-xl px-4 py-4 text-white placeholder-slate-600 transition-all outline-none 
+            placeholder="AIzaSy..." 
+            className={`w-full bg-slate-950 border rounded-xl px-4 py-3.5 text-white placeholder-slate-600 transition-all outline-none 
               ${validationResult?.success ? 'border-emerald-500 ring-1 ring-emerald-500' : 'border-slate-700 focus:border-brand-500 focus:ring-1 focus:ring-brand-500'}`}
             value={manualKey}
-            onChange={(e) => setManualKey(e.target.value)}
+            onChange={(e) => {
+                setManualKey(e.target.value);
+                setValidationResult(null);
+            }}
             required
           />
           {validationResult && (
-            <div className={`mt-2 text-xs font-bold flex items-center justify-center gap-1.5 ${validationResult.success ? 'text-emerald-400' : 'text-rose-400'}`}>
+            <div className={`mt-2 text-xs font-bold flex items-center gap-1.5 ${validationResult.success ? 'text-emerald-400' : 'text-rose-400'}`}>
               {validationResult.success ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
               {validationResult.message}
             </div>
@@ -219,17 +231,17 @@ const App: React.FC = () => {
            <button 
             type="submit"
             disabled={isValidating}
-            className="flex-1 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-brand-600/20 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
+            className="flex-1 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-brand-600/20 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            {isValidating ? <RefreshCcw className="animate-spin" size={18} /> : (apiKeySelected ? 'Update Key' : 'Get Started')}
+            {isValidating ? <RefreshCcw className="animate-spin" size={18} /> : (apiKeySelected ? 'Update Key' : 'Unlock Application')}
             {!isValidating && <ArrowRight size={18} />}
           </button>
           {apiKeySelected && (
             <button 
               type="button"
               onClick={handleClearKey}
-              className="px-4 py-4 bg-slate-800 hover:bg-rose-900/20 text-slate-400 hover:text-rose-400 rounded-xl transition-all border border-slate-700"
-              title="Remove Key"
+              className="px-4 py-3.5 bg-slate-800 hover:bg-rose-900/20 text-slate-400 hover:text-rose-400 rounded-xl transition-all border border-slate-700"
+              title="Logout Key"
             >
               <X size={20} />
             </button>
@@ -243,28 +255,29 @@ const App: React.FC = () => {
             onClick={handleSelectKeyFromStudio}
             className="text-xs font-bold text-slate-500 hover:text-brand-400 transition-colors uppercase tracking-widest"
           >
-            Or use AI Studio Key Selection
+            Or use AI Studio Selection
           </button>
         </div>
       )}
 
       <div className="pt-4 border-t border-slate-800">
         <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
-          Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">Google AI Studio</a>. 
-          Standard free tier limits apply.
+          Don't have a key? Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">Google AI Studio</a>.
         </p>
       </div>
     </div>
   );
 
+  // Initial setup view if no key is present
   if (apiKeySelected === false && !isKeyModalOpen) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 selection:bg-brand-500/30">
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
         <KeyManagementUI isFullPage={true} />
       </div>
     );
   }
 
+  // Loading state while checking keys
   if (apiKeySelected === null) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -279,13 +292,13 @@ const App: React.FC = () => {
       onOpenKeySettings={() => setIsKeyModalOpen(true)}
       isKeyActive={apiKeySelected === true}
     >
-      {/* API Key Modal */}
+      {/* Key Settings Modal */}
       {isKeyModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fade-in">
           <div className="max-w-md w-full bg-slate-900 border border-slate-700 rounded-3xl p-8 shadow-2xl relative">
             <button 
               onClick={() => setIsKeyModalOpen(false)}
-              className="absolute top-4 right-4 text-slate-500 hover:text-white transition-colors"
+              className="absolute top-4 right-4 text-slate-500 hover:text-white transition-colors p-2"
             >
               <X size={24} />
             </button>
@@ -297,39 +310,39 @@ const App: React.FC = () => {
       {view === ViewState.INPUT && (
         <div className="max-w-6xl mx-auto space-y-12">
             <div className="flex flex-col items-center space-y-6">
-                <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-500/10 border border-indigo-500/30 rounded-full text-indigo-400 text-[10px] font-bold uppercase tracking-widest animate-pulse">
+                <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-500/10 border border-indigo-500/30 rounded-full text-indigo-400 text-[10px] font-bold uppercase tracking-widest">
                     <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-ping mr-1"></div>
-                    AI Researcher Active
+                    Synthesis Agent Active
                 </div>
                 
                 <div className="text-center">
                     <h2 className="text-4xl font-black text-white">Research <span className="text-brand-400">Synthesis</span></h2>
-                    <p className="text-slate-400 max-w-xl mx-auto mt-3">Input your observations below. ArchetypeAI will identify behavioral clusters and goals.</p>
+                    <p className="text-slate-400 max-w-xl mx-auto mt-3">Synthesize raw observations into behavioral clusters and evocative archetypes.</p>
                 </div>
 
                 <div className="w-full flex flex-wrap gap-4 justify-start pt-2">
                     <button 
                       onClick={() => setView(ViewState.BOOTCAMP)}
-                      className="inline-flex items-center gap-3 bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 px-6 py-3 rounded-xl text-base font-bold transition-all group shadow-lg shadow-brand-500/5"
+                      className="inline-flex items-center gap-3 bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 px-6 py-3 rounded-xl text-base font-bold transition-all group"
                     >
                       <GraduationCap size={22} className="group-hover:rotate-12 transition-transform" />
-                      New to archetypes? Start the Bootcamp
+                      Start the Bootcamp
                     </button>
 
                     <button 
                       onClick={() => setInputData(SAMPLE_DATA)}
-                      className="inline-flex items-center gap-3 bg-slate-500/10 hover:bg-slate-500/20 text-slate-400 border border-slate-500/30 px-6 py-3 rounded-xl text-base font-bold transition-all group shadow-lg shadow-slate-500/5"
+                      className="inline-flex items-center gap-3 bg-slate-500/10 hover:bg-slate-500/20 text-slate-400 border border-slate-500/30 px-6 py-3 rounded-xl text-base font-bold transition-all group"
                     >
                       <BookOpen size={20} className="group-hover:scale-110 transition-transform" />
-                      Load Detailed Example
+                      Load Example Data
                     </button>
                     
                     <button 
                       onClick={() => setView(ViewState.SAVED)}
-                      className="inline-flex items-center gap-3 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 px-6 py-3 rounded-xl text-base font-bold transition-all group shadow-lg shadow-indigo-500/5"
+                      className="inline-flex items-center gap-3 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 px-6 py-3 rounded-xl text-base font-bold transition-all group"
                     >
                       <Library size={20} className="group-hover:scale-110 transition-transform" />
-                      Browse Library
+                      Library
                     </button>
                 </div>
             </div>
@@ -346,18 +359,8 @@ const App: React.FC = () => {
             <button onClick={() => setView(ViewState.INPUT)} className="flex items-center gap-2 text-slate-400 text-sm hover:text-white transition-colors"><ArrowLeft size={16}/> Back to Editor</button>
             <div className="text-right">
                 <h3 className="text-2xl font-bold text-white">Synthesis Results</h3>
-                <p className="text-xs text-slate-500 italic">Review and polish your archetypes.</p>
+                <p className="text-xs text-slate-500 italic">Polish and save your generated archetypes.</p>
             </div>
-          </div>
-
-          <div className="bg-indigo-950/20 border border-indigo-500/30 rounded-2xl p-6 flex flex-col md:flex-row items-start md:items-center gap-6 shadow-xl">
-             <div className="p-3 bg-indigo-500/10 rounded-xl text-indigo-400 flex-shrink-0">
-                <Info size={28} />
-             </div>
-             <div className="flex-1 space-y-3">
-                <h4 className="text-white font-bold text-lg">Batch Generation Complete</h4>
-                <p className="text-xs text-slate-300">The <strong>Research Framework</strong> has been saved as a project card in your library. All archetypes below are linked to it.</p>
-             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -380,7 +383,7 @@ const App: React.FC = () => {
              <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900/90 border border-slate-700 px-6 py-3 rounded-full flex items-center gap-6 shadow-2xl backdrop-blur-xl z-40">
                  <span className="text-xs font-bold text-white uppercase">{selectedArchetypeIds.size} Selected</span>
                  <button onClick={() => setView(ViewState.COMPARE)} disabled={selectedArchetypeIds.size < 2} className="bg-brand-600 px-4 py-2 rounded-full text-xs font-bold disabled:opacity-50 hover:bg-brand-500 transition-colors">Compare Archetypes</button>
-                 <button onClick={() => setSelectedArchetypeIds(new Set())} className="text-xs text-slate-400 hover:text-white">Clear Selection</button>
+                 <button onClick={() => setSelectedArchetypeIds(new Set())} className="text-xs text-slate-400 hover:text-white">Clear</button>
              </div>
           )}
         </div>
